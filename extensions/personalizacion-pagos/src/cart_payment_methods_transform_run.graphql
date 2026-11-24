@@ -1,0 +1,58 @@
+query Input(
+  $watchedTags: [String!]! = []
+  $watchedCollections: [ID!]! = []
+  $mf0Ns: String = "__unused__"
+  $mf0Key: String! = "__unused__"
+  $mf1Ns: String = "__unused__"
+  $mf1Key: String! = "__unused__"
+  $mf2Ns: String = "__unused__"
+  $mf2Key: String! = "__unused__"
+  $mf3Ns: String = "__unused__"
+  $mf3Key: String! = "__unused__"
+) {
+  cart {
+    lines {
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          sku
+          product {
+            id
+            title
+            productType
+            vendor
+            hasTags(tags: $watchedTags) {
+              tag
+              hasTag
+            }
+            inCollections(ids: $watchedCollections) {
+              collectionId
+              isMember
+            }
+            mf0: metafield(namespace: $mf0Ns, key: $mf0Key) {
+              value
+            }
+            mf1: metafield(namespace: $mf1Ns, key: $mf1Key) {
+              value
+            }
+            mf2: metafield(namespace: $mf2Ns, key: $mf2Key) {
+              value
+            }
+            mf3: metafield(namespace: $mf3Ns, key: $mf3Key) {
+              value
+            }
+          }
+        }
+      }
+    }
+  }
+  paymentMethods {
+    id
+    name
+  }
+  paymentCustomization {
+    metafield(namespace: "$app:payment-filter", key: "rules-config") {
+      jsonValue
+    }
+  }
+}

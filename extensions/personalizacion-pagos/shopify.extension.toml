@@ -1,0 +1,23 @@
+api_version = "2026-07"
+
+[[extensions]]
+name = "App Personalizacion de Metodos de Pago"
+handle = "personalizacion-pagos"
+type = "function"
+uid = "78ff8057-9cb7-5f88-0594-a55a289f415a7b7e8156"
+description = "t:description"
+
+  [[extensions.targeting]]
+  target = "cart.payment-methods.transform.run"
+  input_query = "src/cart_payment_methods_transform_run.graphql"
+  input_variables = { namespace = "$app:payment-filter", key = "input-vars" }
+  export = "cart_payment_methods_transform_run"
+
+  [extensions.build]
+  command = "cargo build --target=wasm32-unknown-unknown --release"
+  path = "target/wasm32-unknown-unknown/release/personalizacion-pagos.wasm"
+  watch = [ "src/**/*.rs", "src/**/*.graphql" ]
+
+  [extensions.ui.paths]
+  create = "/app"
+  details = "/app"
