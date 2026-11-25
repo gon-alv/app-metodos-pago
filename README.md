@@ -148,6 +148,8 @@ shopify app config validate
 
 ## Despliegue y publicación (Unlisted / Custom)
 
+Consulta la guía paso a paso en [DEPLOY.md](./DEPLOY.md) para ver cómo subir la aplicación a un servidor **con Docker** o **sin Docker** (Node.js + systemd/PM2 + Nginx/Caddy).
+
 1. **Hosting de la app web**: `shopify app deploy` sube la configuración y el módulo `.wasm` de la Shopify Function, pero el servidor Node/React Router debe desplegarse en un hosting HTTPS propio (el proyecto incluye `Dockerfile`).
 2. **Base de datos y webhooks de cumplimiento**: antes de publicar como app pública con visibilidad limitada (*Unlisted* / *Limited visibility*), configura una base de datos persistente para producción (por ejemplo PostgreSQL en `prisma/schema.prisma`) y agrega los webhooks obligatorios de privacidad (`customers/data_request`, `customers/redact`, `shop/redact`) en `shopify.app.toml`.
 3. **Tipo de distribución**:

@@ -124,6 +124,12 @@ export const action = async ({ request }) => {
   }
 
   if (intent === "delete_all") {
+    if (formData.get("confirmed") !== "true") {
+      return {
+        ok: false,
+        error: "Debes completar la doble verificación para eliminar todos los métodos.",
+      };
+    }
     uiConfig.catalog = [];
     const saveRes = await saveUiConfig(admin, uiConfig);
     if (!saveRes.ok) {
@@ -172,7 +178,8 @@ export default function PaymentMethodsCatalogPage() {
   const [matchType, setMatchType] = useState("contains");
   const [selectionMode, setSelectionMode] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
+  const [deleteAllStep, setDeleteAllStep] = useState(0);
+  const [deleteAllConfirmedCheck, setDeleteAllConfirmedCheck] = useState(false);
 
   const isBusy = fetcher.state !== "idle";
 
@@ -207,7 +214,8 @@ export default function PaymentMethodsCatalogPage() {
       ) {
         setSelectedIds([]);
         setSelectionMode(false);
-        setConfirmDeleteAll(false);
+        setDeleteAllStep(0);
+        setDeleteAllConfirmedCheck(false);
       }
     } else if (fetcher.data?.error) {
       shopify.toast.show(fetcher.data.error, { isError: true });
@@ -239,8 +247,10 @@ export default function PaymentMethodsCatalogPage() {
   };
 
   const handleDeleteAll = () => {
+    if (deleteAllStep !== 2 || !deleteAllConfirmedCheck) return;
     const formData = new FormData();
     formData.set("intent", "delete_all");
+    formData.set("confirmed", "true");
     fetcher.submit(formData, { method: "POST" });
   };
 
@@ -377,7 +387,8 @@ export default function PaymentMethodsCatalogPage() {
                     disabled={isBusy || undefined}
                     onClick={() => {
                       setSelectionMode(true);
-                      setConfirmDeleteAll(false);
+                      setDeleteAllStep(0);
+                      setDeleteAllConfirmedCheck(false);
                     }}
                   >
                     Seleccionar para eliminar
@@ -386,7 +397,10 @@ export default function PaymentMethodsCatalogPage() {
                     variant="secondary"
                     tone="critical"
                     disabled={isBusy || undefined}
-                    onClick={() => setConfirmDeleteAll(true)}
+                    onClick={() => {
+                      setDeleteAllStep(1);
+                      setDeleteAllConfirmedCheck(false);
+                    }}
                   >
                     Eliminar todos
                   </s-button>
@@ -444,28 +458,75 @@ export default function PaymentMethodsCatalogPage() {
               </s-box>
             )}
 
-            {confirmDeleteAll && !selectionMode && (
-              <s-banner heading="Confirmar eliminación total" tone="critical">
+            {deleteAllStep === 1 && !selectionMode && (
+              <s-banner heading="Paso 1 de 2: Verificar eliminación total" tone="warning">
                 <s-stack direction="block" gap="small">
                   <s-paragraph>
-                    Se eliminarán los {catalog.length} método(s) guardado(s) del
-                    catálogo. Las reglas ya creadas conservarán sus métodos
-                    configurados.
+                    Estás a punto de eliminar los {catalog.length} método(s)
+                    guardado(s) del catálogo. Las reglas ya creadas conservarán
+                    sus métodos configurados.
                   </s-paragraph>
                   <s-stack direction="inline" gap="small">
                     <s-button
                       variant="primary"
                       tone="critical"
-                      loading={isBusy || undefined}
                       disabled={isBusy || undefined}
-                      onClick={handleDeleteAll}
+                      onClick={() => {
+                        setDeleteAllStep(2);
+                        setDeleteAllConfirmedCheck(false);
+                      }}
                     >
-                      Confirmar eliminar todos
+                      Continuar
                     </s-button>
                     <s-button
                       variant="secondary"
                       disabled={isBusy || undefined}
-                      onClick={() => setConfirmDeleteAll(false)}
+                      onClick={() => {
+                        setDeleteAllStep(0);
+                        setDeleteAllConfirmedCheck(false);
+                      }}
+                    >
+                      Cancelar
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+              </s-banner>
+            )}
+
+            {deleteAllStep === 2 && !selectionMode && (
+              <s-banner heading="Paso 2 de 2: Confirmación definitiva" tone="critical">
+                <s-stack direction="block" gap="small">
+                  <s-paragraph>
+                    Esta acción vaciará el catálogo de métodos guardados y no se
+                    puede deshacer. Confirma explícitamente antes de continuar.
+                  </s-paragraph>
+                  <s-checkbox
+                    label={`Sí, confirmo que deseo eliminar todos los (${catalog.length}) métodos guardados`}
+                    checked={deleteAllConfirmedCheck || undefined}
+                    disabled={isBusy || undefined}
+                    onInput={(e) =>
+                      setDeleteAllConfirmedCheck(
+                        Boolean(e.currentTarget?.checked ?? e.target?.checked)
+                      )
+                    }
+                  />
+                  <s-stack direction="inline" gap="small">
+                    <s-button
+                      variant="primary"
+                      tone="critical"
+                      loading={isBusy || undefined}
+                      disabled={isBusy || !deleteAllConfirmedCheck || undefined}
+                      onClick={handleDeleteAll}
+                    >
+                      Eliminar todos definitivamente
+                    </s-button>
+                    <s-button
+                      variant="secondary"
+                      disabled={isBusy || undefined}
+                      onClick={() => {
+                        setDeleteAllStep(0);
+                        setDeleteAllConfirmedCheck(false);
+                      }}
                     >
                       Cancelar
                     </s-button>
