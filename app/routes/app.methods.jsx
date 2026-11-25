@@ -5,6 +5,7 @@ import { boundary } from "@shopify/shopify-app-react-router/server";
 import { authenticate } from "../shopify.server";
 import {
   DEFAULT_PAYMENT_METHODS_CATALOG,
+  normalizeComparableText,
   validateCatalogMethod,
 } from "../lib/payment-rules";
 import {
@@ -43,9 +44,10 @@ export const action = async ({ request }) => {
       };
     }
 
+    const normalizedPattern = normalizeComparableText(pattern);
     const duplicate = uiConfig.catalog.some(
       (m) =>
-        m.pattern.trim().toLowerCase() === pattern.toLowerCase() &&
+        normalizeComparableText(m.pattern) === normalizedPattern &&
         m.matchType === matchType,
     );
     if (duplicate) {
@@ -82,11 +84,11 @@ export const action = async ({ request }) => {
   if (intent === "load_presets") {
     const existingKeys = new Set(
       uiConfig.catalog.map(
-        (m) => `${m.pattern.trim().toLowerCase()}::${m.matchType}`,
+        (m) => `${normalizeComparableText(m.pattern)}::${m.matchType}`,
       ),
     );
     for (const preset of DEFAULT_PAYMENT_METHODS_CATALOG) {
-      const key = `${preset.pattern.trim().toLowerCase()}::${preset.matchType}`;
+      const key = `${normalizeComparableText(preset.pattern)}::${preset.matchType}`;
       if (!existingKeys.has(key)) {
         uiConfig.catalog.push({ ...preset });
       }
@@ -157,7 +159,16 @@ export default function PaymentMethodsCatalogPage() {
       <s-banner heading="Cómo se vinculan los métodos de pago" tone="info">
         Shopify no expone la lista de métodos activos del checkout por Admin API.
         Guarda aquí los nombres (o palabras clave) tal como los ven tus clientes
-        en el checkout para reutilizarlos fácilmente al crear reglas.
+        en el checkout para reutilizarlos fácilmente al crear reglas. Los métodos
+        nativos de Shopify incluyen equivalencia automática español ↔ inglés
+        (ignorando mayúsculas y tildes):{" "}
+        <code>Depósito bancario</code> ↔ <code>Bank Deposit</code>,{" "}
+        <code>Giro postal</code> ↔ <code>Money Order</code>,{" "}
+        <code>Pago contra entrega (COD)</code> ↔{" "}
+        <code>Cash on Delivery (COD)</code>, <code>Tarjeta de regalo</code> ↔{" "}
+        <code>Gift card</code>, <code>Pago diferido</code> ↔{" "}
+        <code>Deferred</code> y <code>Pasarela simulada</code> ↔{" "}
+        <code>(for testing) Bogus Gateway</code>.
       </s-banner>
 
       {fetcher.data?.error && (

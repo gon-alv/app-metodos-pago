@@ -12,6 +12,7 @@ export const UNUSED_METAFIELD_SENTINEL = "__unused__";
 export const CONDITION_FIELDS = [
   { value: "tag", label: "Etiqueta (Tag)" },
   { value: "collection", label: "Colección" },
+  { value: "price", label: "Precio del producto (unitario)" },
   { value: "product_type", label: "Tipo de producto" },
   { value: "vendor", label: "Proveedor (Vendor)" },
   { value: "sku", label: "SKU de variante" },
@@ -38,6 +39,7 @@ export const OPERATOR_LABELS = {
 export const OPERATORS_BY_FIELD = {
   tag: ["equals", "not_equals"],
   collection: ["in", "not_in"],
+  price: ["equals", "not_equals", "gt", "gte", "lt", "lte"],
   product_type: [
     "equals",
     "not_equals",
@@ -88,6 +90,24 @@ export const DEFAULT_PAYMENT_METHODS_CATALOG = [
     id: "pm-transferencia",
     label: "Transferencia directa",
     pattern: "transferencia directa",
+    matchType: "contains",
+  },
+  {
+    id: "pm-deposito",
+    label: "Depósito bancario",
+    pattern: "depósito bancario",
+    matchType: "contains",
+  },
+  {
+    id: "pm-giro-postal",
+    label: "Giro postal",
+    pattern: "giro postal",
+    matchType: "contains",
+  },
+  {
+    id: "pm-cod",
+    label: "Pago contra entrega (COD)",
+    pattern: "pago contra entrega",
     matchType: "contains",
   },
   {
@@ -168,6 +188,15 @@ export const SAMPLE_RULE_TEMPLATES = [
     ],
   },
 ];
+
+export function normalizeComparableText(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u0302\u0308]/g, "")
+    .normalize("NFC");
+}
 
 function makeId(prefix = "id") {
   const rand = Math.random().toString(36).slice(2, 8);
@@ -369,10 +398,16 @@ export function validateRule(rule) {
         const val = String(cond?.value ?? "").trim();
         if (!val) {
           condErrors.value = "Ingresa un valor para comparar.";
-        } else if (["gt", "gte", "lt", "lte"].includes(cond?.operator)) {
+        } else if (
+          cond?.field === "price" ||
+          ["gt", "gte", "lt", "lte"].includes(cond?.operator)
+        ) {
           const parsed = Number(val);
-          if (!Number.isFinite(parsed)) {
-            condErrors.value = "Este operador requiere un valor numérico.";
+          if (!/^-?\d+(\.\d+)?$/.test(val) || !Number.isFinite(parsed)) {
+            condErrors.value =
+              "Ingresa un número válido sin separadores de miles (ej: 50000 o 19.99).";
+          } else if (cond?.field === "price" && parsed < 0) {
+            condErrors.value = "El precio no puede ser negativo.";
           }
         }
       }

@@ -1,0 +1,100 @@
+{
+  "payload": {
+    "export": "cart_payment_methods_transform_run",
+    "target": "cart.payment-methods.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "cost": { "amountPerQuantity": { "amount": "55000.00" } },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "sku": "PRICE-HIGH",
+              "product": {
+                "id": "gid://shopify/Product/10",
+                "title": "Equipo Alto Valor",
+                "productType": "Hardware",
+                "vendor": "SmartMob",
+                "hasTags": [],
+                "inCollections": [],
+                "mf0": null,
+                "mf1": null,
+                "mf2": null,
+                "mf3": null
+              }
+            }
+          },
+          {
+            "cost": { "amountPerQuantity": { "amount": "25000" } },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "sku": "PRICE-LOW",
+              "product": {
+                "id": "gid://shopify/Product/11",
+                "title": "Accesorio Exacto",
+                "productType": "Accesorio",
+                "vendor": "SmartMob",
+                "hasTags": [],
+                "inCollections": [],
+                "mf0": null,
+                "mf1": null,
+                "mf2": null,
+                "mf3": null
+              }
+            }
+          }
+        ]
+      },
+      "paymentMethods": [
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/1", "name": "Transferencia directa" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/2", "name": "Pago en tienda" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/3", "name": "Tarjeta de crédito" }
+      ],
+      "paymentCustomization": {
+        "metafield": {
+          "jsonValue": {
+            "failSafe": true,
+            "rules": [
+              {
+                "cartMatch": "any",
+                "conditionLogic": "all",
+                "conditions": [
+                  { "field": "price", "operator": "gt", "value": "50000", "metafieldSlot": -1 }
+                ],
+                "action": "hide_selected",
+                "targets": [
+                  { "pattern": "pago en tienda", "matchType": "contains" }
+                ]
+              },
+              {
+                "cartMatch": "any",
+                "conditionLogic": "all",
+                "conditions": [
+                  { "field": "price", "operator": "equals", "value": "25000.00", "metafieldSlot": -1 }
+                ],
+                "action": "hide_selected",
+                "targets": [
+                  { "pattern": "tarjeta", "matchType": "contains" }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/2"
+          }
+        },
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/3"
+          }
+        }
+      ]
+    }
+  }
+}

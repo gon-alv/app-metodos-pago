@@ -6,6 +6,7 @@ import {
   formatRuleSummary,
   MAX_METAFIELD_SLOTS,
   MAX_RULES_CONFIG_BYTES,
+  normalizeComparableText,
   SAMPLE_RULE_TEMPLATES,
   UNUSED_METAFIELD_SENTINEL,
   validateCatalogMethod,
@@ -229,4 +230,58 @@ test("formatRuleSummary resolves collection title and Spanish summary", () => {
   assert.match(summary, /Outlet Reacondicionados/);
   assert.match(summary, /mostrar SOLO/);
   assert.match(summary, /Transferencia directa/);
+});
+
+test("validateRule and compileFunctionPayloads support price conditions", () => {
+  const invalidNonNumeric = validateRule({
+    name: "Precio inválido",
+    conditions: [{ field: "price", operator: "gt", value: "50.000,00" }],
+    targets: [{ pattern: "pago en tienda", matchType: "contains" }],
+  });
+  assert.equal(invalidNonNumeric.valid, false);
+  assert.match(
+    invalidNonNumeric.errors.conditions[0].value,
+    /número válido/,
+  );
+
+  const invalidNegative = validateRule({
+    name: "Precio negativo",
+    conditions: [{ field: "price", operator: "equals", value: "-10" }],
+    targets: [{ pattern: "pago en tienda", matchType: "contains" }],
+  });
+  assert.equal(invalidNegative.valid, false);
+  assert.match(
+    invalidNegative.errors.conditions[0].value,
+    /negativo/,
+  );
+
+  const validConfig = createDefaultUiConfig();
+  validConfig.rules.push({
+    id: "r-price",
+    name: "Precio mayor a 50000",
+    enabled: true,
+    cartMatch: "any",
+    conditionLogic: "all",
+    conditions: [
+      { id: "c-p1", field: "price", operator: "gt", value: "50000" },
+      { id: "c-p2", field: "price", operator: "lte", value: "99999.99" },
+    ],
+    action: "hide_selected",
+    targets: [{ pattern: "pago en tienda", matchType: "contains" }],
+  });
+
+  const compiled = compileFunctionPayloads(validConfig);
+  assert.equal(compiled.ok, true);
+  assert.equal(compiled.rulesConfig.rules[0].conditions[0].field, "price");
+  assert.equal(compiled.rulesConfig.rules[0].conditions[0].operator, "gt");
+  assert.equal(compiled.rulesConfig.rules[0].conditions[0].value, "50000");
+  assert.equal(compiled.rulesConfig.rules[0].conditions[0].metafieldSlot, -1);
+});
+
+test("normalizeComparableText strips vocalic tildes while preserving ñ", () => {
+  assert.equal(
+    normalizeComparableText("  Depósito Débito Ñandú  "),
+    "deposito debito ñandu",
+  );
+  assert.equal(normalizeComparableText("VIDEÓGRAFO"), "videografo");
 });

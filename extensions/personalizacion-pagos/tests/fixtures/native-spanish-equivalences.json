@@ -1,0 +1,97 @@
+{
+  "payload": {
+    "export": "cart_payment_methods_transform_run",
+    "target": "cart.payment-methods.transform.run",
+    "input": {
+      "cart": {
+        "lines": [
+          {
+            "cost": { "amountPerQuantity": { "amount": "150.00" } },
+            "merchandise": {
+              "__typename": "ProductVariant",
+              "sku": "ES-01",
+              "product": {
+                "id": "gid://shopify/Product/20",
+                "title": "El Videógrafo Snowboard",
+                "productType": "Equipo",
+                "vendor": "SmartMob",
+                "hasTags": [
+                  { "tag": "solo-pasarelas", "hasTag": true }
+                ],
+                "inCollections": [],
+                "mf0": null,
+                "mf1": null,
+                "mf2": null,
+                "mf3": null
+              }
+            }
+          }
+        ]
+      },
+      "paymentMethods": [
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/1", "name": "Bank Deposit" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/2", "name": "Money Order" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/3", "name": "Cash on Delivery (COD)" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/4", "name": "Checkout Flow | Tarjeta. Transf., Cuotas débito" },
+        { "id": "gid://shopify/PaymentCustomizationPaymentMethod/5", "name": "Transbank Webpay" }
+      ],
+      "paymentCustomization": {
+        "metafield": {
+          "jsonValue": {
+            "failSafe": true,
+            "rules": [
+              {
+                "cartMatch": "any",
+                "conditionLogic": "all",
+                "conditions": [
+                  { "field": "tag", "operator": "equals", "value": "solo-pasarelas", "metafieldSlot": -1 }
+                ],
+                "action": "hide_selected",
+                "targets": [
+                  { "pattern": "deposito bancario", "matchType": "exact" },
+                  { "pattern": "Giro postal", "matchType": "exact" },
+                  { "pattern": "Pago contra entrega", "matchType": "contains" }
+                ]
+              },
+              {
+                "cartMatch": "any",
+                "conditionLogic": "all",
+                "conditions": [
+                  { "field": "title", "operator": "contains", "value": "videografo", "metafieldSlot": -1 }
+                ],
+                "action": "hide_selected",
+                "targets": [
+                  { "pattern": "cuotas debito", "matchType": "contains" }
+                ]
+              }
+            ]
+          }
+        }
+      }
+    },
+    "output": {
+      "operations": [
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/1"
+          }
+        },
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/2"
+          }
+        },
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/3"
+          }
+        },
+        {
+          "paymentMethodHide": {
+            "paymentMethodId": "gid://shopify/PaymentCustomizationPaymentMethod/4"
+          }
+        }
+      ]
+    }
+  }
+}

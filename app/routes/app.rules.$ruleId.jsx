@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 import {
-  redirect,
   useActionData,
   useLoaderData,
   useNavigate,
@@ -16,6 +15,7 @@ import {
   createEmptyRule,
   formatRuleSummary,
   MAX_METAFIELD_SLOTS,
+  normalizeComparableText,
   normalizeRule,
   OPERATOR_LABELS,
   OPERATORS_BY_FIELD,
@@ -67,7 +67,7 @@ export const loader = async ({ request, params }) => {
 };
 
 export const action = async ({ request, params }) => {
-  const { admin } = await authenticate.admin(request);
+  const { admin, redirect } = await authenticate.admin(request);
   const formData = await request.formData();
 
   let parsedRule;
@@ -100,13 +100,11 @@ export const action = async ({ request, params }) => {
   if (Array.isArray(parsedExtraCatalog) && parsedExtraCatalog.length > 0) {
     const existingKeys = new Set(
       uiConfig.catalog.map(
-        (m) => `${m.pattern.trim().toLowerCase()}::${m.matchType}`,
+        (m) => `${normalizeComparableText(m.pattern)}::${m.matchType}`,
       ),
     );
     for (const item of parsedExtraCatalog) {
-      const key = `${String(item?.pattern || "")
-        .trim()
-        .toLowerCase()}::${item?.matchType === "exact" ? "exact" : "contains"}`;
+      const key = `${normalizeComparableText(item?.pattern)}::${item?.matchType === "exact" ? "exact" : "contains"}`;
       if (item?.pattern && !existingKeys.has(key)) {
         uiConfig.catalog.push({
           id: `pm-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
@@ -199,7 +197,7 @@ export default function RuleEditorPage() {
     const merged = [...(uiConfig?.catalog || []), ...extraCatalog];
     const seen = new Set();
     return merged.filter((m) => {
-      const k = `${m.pattern.trim().toLowerCase()}::${m.matchType}`;
+      const k = `${normalizeComparableText(m.pattern)}::${m.matchType}`;
       if (seen.has(k)) return false;
       seen.add(k);
       return true;
@@ -286,16 +284,17 @@ export default function RuleEditorPage() {
   const isCatalogMethodSelected = (method) =>
     rule.targets.some(
       (t) =>
-        t.pattern.trim().toLowerCase() ===
-          method.pattern.trim().toLowerCase() && t.matchType === method.matchType,
+        normalizeComparableText(t.pattern) ===
+          normalizeComparableText(method.pattern) &&
+        t.matchType === method.matchType,
     );
 
   const handleToggleCatalogMethod = (method) => {
     setRule((prev) => {
+      const methodKey = normalizeComparableText(method.pattern);
       const exists = prev.targets.some(
         (t) =>
-          t.pattern.trim().toLowerCase() ===
-            method.pattern.trim().toLowerCase() &&
+          normalizeComparableText(t.pattern) === methodKey &&
           t.matchType === method.matchType,
       );
       if (exists) {
@@ -304,8 +303,7 @@ export default function RuleEditorPage() {
           targets: prev.targets.filter(
             (t) =>
               !(
-                t.pattern.trim().toLowerCase() ===
-                  method.pattern.trim().toLowerCase() &&
+                normalizeComparableText(t.pattern) === methodKey &&
                 t.matchType === method.matchType
               ),
           ),
@@ -760,13 +758,24 @@ export default function RuleEditorPage() {
                         )}
 
                       <s-text-field
-                        label="Valor a comparar"
+                        label={
+                          cond.field === "price"
+                            ? "Precio unitario a comparar"
+                            : "Valor a comparar"
+                        }
                         placeholder={
                           cond.field === "tag"
                             ? "reacondicionado"
                             : cond.field === "sku"
                               ? "SRV-001"
-                              : "Valor esperado"
+                              : cond.field === "price"
+                                ? "Ej: 50000 o 19.99"
+                                : "Valor esperado"
+                        }
+                        details={
+                          cond.field === "price"
+                            ? "Monto en la moneda del checkout, sin símbolo ni separador de miles."
+                            : undefined
                         }
                         value={cond.value}
                         error={condErr.value || undefined}
@@ -931,8 +940,9 @@ export default function RuleEditorPage() {
           <s-paragraph>{formatRuleSummary(rule, collectionsById)}</s-paragraph>
         </s-box>
         <s-paragraph color="subdued">
-          La comparación de texto y etiquetas no distingue entre mayúsculas y
-          minúsculas ni espacios al inicio o al final.
+          La comparación de texto, etiquetas y métodos de pago ignora
+          automáticamente mayúsculas, minúsculas, tildes y espacios al inicio o
+          al final.
         </s-paragraph>
       </s-section>
     </s-page>

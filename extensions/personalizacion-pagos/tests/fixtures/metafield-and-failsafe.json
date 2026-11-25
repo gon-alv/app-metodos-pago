@@ -6,6 +6,7 @@
       "cart": {
         "lines": [
           {
+            "cost": { "amountPerQuantity": { "amount": "100.00" } },
             "merchandise": {
               "__typename": "ProductVariant",
               "sku": "MF-100",

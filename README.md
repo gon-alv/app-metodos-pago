@@ -21,13 +21,13 @@ Cada regla aplica una acción sobre los métodos de pago disponibles en el check
   - `any`: la regla se activa si **al menos un producto** del carrito cumple las condiciones.
   - `all`: la regla se activa solo si **todos los productos** del carrito las cumplen.
 - **Campos soportados**:
-  - Estándar: Etiqueta (`tag`), Colección (`collection`), Tipo de producto (`product_type`), Proveedor (`vendor`), SKU de variante (`sku`) y Título del producto (`title`).
+  - Estándar: Etiqueta (`tag`), Colección (`collection`), Precio unitario (`price`), Tipo de producto (`product_type`), Proveedor (`vendor`), SKU de variante (`sku`) y Título del producto (`title`).
   - Metacampos de producto (`metafield`): seleccionables desde las definiciones de la tienda o ingresando `namespace` y `key` manualmente (hasta **4 metacampos distintos** activos en paralelo).
 - **Operadores**:
-  - Texto: `equals`, `not_equals`, `contains`, `not_contains`, `starts_with` (insensibles a mayúsculas, minúsculas y espacios al inicio/final).
+  - Texto: `equals`, `not_equals`, `contains`, `not_contains`, `starts_with` (insensibles a mayúsculas, minúsculas, tildes y espacios al inicio/final).
   - Pertenencia: `in`, `not_in` (para colecciones y etiquetas).
   - Presencia: `is_empty`, `is_not_empty`.
-  - Numéricos: `gt`, `gte`, `lt`, `lte` (sobre valores de metacampos numéricos).
+  - Numéricos: `equals`, `not_equals`, `gt`, `gte`, `lt`, `lte` (para `price` y valores de metacampos numéricos).
 
 ### 3. Resolución acumulativa y protección anti-bloqueo (`failSafe`)
 - **Evaluación acumulativa**: cuando un carrito activa más de una regla simultáneamente, se combinan todas sus restricciones (cualquier método ocultado o excluido por al menos una regla queda oculto).
@@ -36,7 +36,20 @@ Cada regla aplica una acción sobre los métodos de pago disponibles en el check
 ### 4. Catálogo reutilizable de métodos de pago
 Dado que la Admin API de Shopify no expone la lista de métodos de pago activos del checkout, la app mantiene un catálogo reutilizable donde defines cada método con su nombre visible y patrón de coincidencia:
 - **Contiene texto (`contains`)**: recomendado; coincide si el nombre en checkout incluye el texto (ej. `"transferencia directa"`).
-- **Nombre exacto (`exact`)**: coincide exactamente (insensible a mayúsculas y espacios).
+- **Nombre exacto (`exact`)**: coincide exactamente (insensible a mayúsculas, tildes y espacios).
+
+#### Equivalencias automáticas para métodos nativos de Shopify
+Aunque Shopify envía internamente sus métodos manuales/nativos en inglés a la Function, la app reconoce automáticamente sus equivalentes en español (ignorando mayúsculas, tildes y espacios):
+
+| Nombre interno de Shopify | Equivalente(s) en español reconocidos |
+| --- | --- |
+| `Bank Deposit` | `Depósito bancario` |
+| `Money Order` | `Giro postal` |
+| `Cash on Delivery (COD)` | `Pago contra entrega (COD)`, `Pago contra entrega` |
+| `Cash on Delivery` | `Pago contra entrega` |
+| `Gift card` | `Tarjeta de regalo` |
+| `Deferred` | `Pago diferido` |
+| `(for testing) Bogus Gateway` | `(para pruebas) pasarela simulada`, `Pasarela simulada` |
 
 ### 5. Vistas de la aplicación (`/app`)
 - **Panel principal (`app/routes/app._index.jsx`)**: activar/pausar la personalización en el checkout, activar/desactivar la protección anti-bloqueo, cargar reglas de ejemplo, gestionar reglas (editar, activar/pausar, duplicar, eliminar) y monitorear los límites de Shopify Functions en tiempo real.
@@ -64,7 +77,7 @@ Toda la configuración vive en 3 metafields de tipo `json` asociados al propieta
   - Máximo **4 metacampos de producto** distintos entre todas las reglas activas (las reglas pausadas no consumen espacios).
   - Máximo **100 etiquetas** únicas (`watchedTags`) y **100 colecciones** únicas (`watchedCollections`) activas.
   - Tamaño seguro máximo de `rules-config`: **9,800 bytes** UTF-8 (límite de plataforma: 10,000 bytes).
-  - Costo de la input query (`cart_payment_methods_transform_run.graphql`): **28 / 30**.
+  - Costo de la input query (`cart_payment_methods_transform_run.graphql`): **29 / 30**.
 
 ### Estructura principal del proyecto
 ```text

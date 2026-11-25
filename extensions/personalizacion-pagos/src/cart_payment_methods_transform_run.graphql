@@ -12,6 +12,11 @@ query Input(
 ) {
   cart {
     lines {
+      cost {
+        amountPerQuantity {
+          amount
+        }
+      }
       merchandise {
         __typename
         ... on ProductVariant {

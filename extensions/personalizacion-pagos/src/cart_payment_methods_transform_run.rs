@@ -36,13 +36,49 @@ pub struct PaymentTarget {
     pub match_type: String,
 }
 
+struct CartItem<'a> {
+    variant: &'a schema::cart_payment_methods_transform_run::input::cart::lines::merchandise::ProductVariant,
+    unit_price: f64,
+}
+
 fn normalize(value: &str) -> String {
-    value.trim().to_lowercase()
+    let mut out = String::with_capacity(value.len());
+    for ch in value.trim().to_lowercase().chars() {
+        match ch {
+            '\u{0300}' | '\u{0301}' | '\u{0302}' | '\u{0308}' => continue,
+            'á' | 'à' | 'ä' | 'â' | 'ã' | 'å' => out.push('a'),
+            'é' | 'è' | 'ë' | 'ê' => out.push('e'),
+            'í' | 'ì' | 'ï' | 'î' => out.push('i'),
+            'ó' | 'ò' | 'ö' | 'ô' | 'õ' => out.push('o'),
+            'ú' | 'ù' | 'ü' | 'û' => out.push('u'),
+            'ý' | 'ÿ' => out.push('y'),
+            _ => out.push(ch),
+        }
+    }
+    out
+}
+
+fn eval_price(unit_price: f64, operator: &str, expected: &str) -> bool {
+    let expected_num = match expected.trim().parse::<f64>() {
+        Ok(n) if n.is_finite() => n,
+        _ => return false,
+    };
+
+    const EPS: f64 = 1e-6;
+    match operator {
+        "equals" => (unit_price - expected_num).abs() < EPS,
+        "not_equals" => (unit_price - expected_num).abs() >= EPS,
+        "gt" => unit_price > expected_num + EPS,
+        "gte" => unit_price >= expected_num - EPS,
+        "lt" => unit_price < expected_num - EPS,
+        "lte" => unit_price <= expected_num + EPS,
+        _ => false,
+    }
 }
 
 fn eval_scalar(actual: Option<&str>, operator: &str, expected: &str) -> bool {
     let trimmed_actual = actual.map(str::trim).unwrap_or("");
-    let actual_norm = trimmed_actual.to_lowercase();
+    let actual_norm = normalize(trimmed_actual);
     let expected_norm = normalize(expected);
 
     match operator {
@@ -82,13 +118,12 @@ fn eval_scalar(actual: Option<&str>, operator: &str, expected: &str) -> bool {
     }
 }
 
-fn eval_condition(
-    cond: &Condition,
-    variant: &schema::cart_payment_methods_transform_run::input::cart::lines::merchandise::ProductVariant,
-) -> bool {
+fn eval_condition(cond: &Condition, item: &CartItem<'_>) -> bool {
+    let variant = item.variant;
     let product = variant.product();
 
     match cond.field.as_str() {
+        "price" => eval_price(item.unit_price, &cond.operator, &cond.value),
         "tag" => {
             let expected = normalize(&cond.value);
             if expected.is_empty() {
@@ -151,10 +186,7 @@ fn eval_condition(
     }
 }
 
-fn eval_rule_on_variant(
-    rule: &Rule,
-    variant: &schema::cart_payment_methods_transform_run::input::cart::lines::merchandise::ProductVariant,
-) -> bool {
+fn eval_rule_on_item(rule: &Rule, item: &CartItem<'_>) -> bool {
     if rule.conditions.is_empty() {
         return false;
     }
@@ -163,29 +195,35 @@ fn eval_rule_on_variant(
         "any" => rule
             .conditions
             .iter()
-            .any(|cond| eval_condition(cond, variant)),
+            .any(|cond| eval_condition(cond, item)),
         _ => rule
             .conditions
             .iter()
-            .all(|cond| eval_condition(cond, variant)),
+            .all(|cond| eval_condition(cond, item)),
     }
 }
 
-fn rule_matches_cart(
-    rule: &Rule,
-    variants: &[&schema::cart_payment_methods_transform_run::input::cart::lines::merchandise::ProductVariant],
-) -> bool {
-    if variants.is_empty() {
+fn rule_matches_cart(rule: &Rule, items: &[CartItem<'_>]) -> bool {
+    if items.is_empty() {
         return false;
     }
 
     match rule.cart_match.as_str() {
-        "all" => variants
-            .iter()
-            .all(|variant| eval_rule_on_variant(rule, variant)),
-        _ => variants
-            .iter()
-            .any(|variant| eval_rule_on_variant(rule, variant)),
+        "all" => items.iter().all(|item| eval_rule_on_item(rule, item)),
+        _ => items.iter().any(|item| eval_rule_on_item(rule, item)),
+    }
+}
+
+fn native_spanish_aliases(normalized_method_name: &str) -> &'static [&'static str] {
+    match normalized_method_name {
+        "bank deposit" => &["deposito bancario"],
+        "money order" => &["giro postal"],
+        "cash on delivery (cod)" => &["pago contra entrega (cod)", "pago contra entrega"],
+        "cash on delivery" => &["pago contra entrega"],
+        "gift card" => &["tarjeta de regalo"],
+        "deferred" => &["pago diferido"],
+        "(for testing) bogus gateway" => &["(para pruebas) pasarela simulada", "pasarela simulada"],
+        _ => &[],
     }
 }
 
@@ -195,10 +233,14 @@ fn matches_payment_method(target: &PaymentTarget, method_name: &str) -> bool {
         return false;
     }
     let name_norm = normalize(method_name);
+    let aliases = native_spanish_aliases(&name_norm);
 
     match target.match_type.as_str() {
-        "exact" => name_norm == pattern_norm,
-        _ => name_norm.contains(&pattern_norm),
+        "exact" => name_norm == pattern_norm || aliases.iter().any(|alias| *alias == pattern_norm),
+        _ => {
+            name_norm.contains(&pattern_norm)
+                || aliases.iter().any(|alias| alias.contains(&pattern_norm))
+        }
     }
 }
 
@@ -217,24 +259,27 @@ fn cart_payment_methods_transform_run(
         return Ok(no_changes);
     }
 
-    let mut variants = Vec::new();
+    let mut items = Vec::new();
     for line in input.cart().lines().iter() {
         match line.merchandise() {
             schema::cart_payment_methods_transform_run::input::cart::lines::Merchandise::ProductVariant(variant) => {
-                variants.push(variant);
+                items.push(CartItem {
+                    variant,
+                    unit_price: line.cost().amount_per_quantity().amount().as_f64(),
+                });
             }
             _ => continue,
         }
     }
 
-    if variants.is_empty() {
+    if items.is_empty() {
         return Ok(no_changes);
     }
 
     let mut hidden_ids: HashSet<String> = HashSet::new();
 
     for rule in config.rules.iter() {
-        if rule.targets.is_empty() || !rule_matches_cart(rule, &variants) {
+        if rule.targets.is_empty() || !rule_matches_cart(rule, &items) {
             continue;
         }
 
@@ -349,6 +394,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "SKU-1",
@@ -417,6 +463,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "SRV-01",
@@ -481,6 +528,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "R-1",
@@ -502,6 +550,7 @@ mod tests {
                                 }}
                             }},
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "S-1",
@@ -584,6 +633,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "X1",
@@ -664,6 +714,7 @@ mod tests {
                 "cart": {{
                     "lines": [
                         {{
+                            "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                             "merchandise": {{
                                 "__typename": "ProductVariant",
                                 "sku": "PRO-2026-CL",
@@ -738,6 +789,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "A1",
@@ -756,6 +808,7 @@ mod tests {
                                 }}
                             }},
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "B1",
@@ -820,6 +873,7 @@ mod tests {
                 "cart": {{
                     "lines": [
                         {{
+                            "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                             "merchandise": {{
                                 "__typename": "ProductVariant",
                                 "sku": "M1",
@@ -887,6 +941,7 @@ mod tests {
                     "cart": {{
                         "lines": [
                             {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
                                 "merchandise": {{
                                     "__typename": "ProductVariant",
                                     "sku": "X",
@@ -958,6 +1013,338 @@ mod tests {
             contains_hit.operations,
             vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/1")]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_price_equals_greater_and_less_conditions() -> Result<()> {
+        let make_price_input = |unit_price: &str, operator: &str, expected: &str| {
+            format!(
+                r#"{{
+                    "cart": {{
+                        "lines": [
+                            {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "{}" }} }},
+                                "merchandise": {{
+                                    "__typename": "ProductVariant",
+                                    "sku": "P-1",
+                                    "product": {{
+                                        "id": "gid://shopify/Product/1",
+                                        "title": "Producto",
+                                        "productType": "Hardware",
+                                        "vendor": "Marca",
+                                        "hasTags": [],
+                                        "inCollections": [],
+                                        "mf0": null,
+                                        "mf1": null,
+                                        "mf2": null,
+                                        "mf3": null
+                                    }}
+                                }}
+                            }}
+                        ]
+                    }},
+                    "paymentMethods": {},
+                    "paymentCustomization": {{
+                        "metafield": {{
+                            "jsonValue": {{
+                                "failSafe": true,
+                                "rules": [
+                                    {{
+                                        "cartMatch": "any",
+                                        "conditionLogic": "all",
+                                        "conditions": [
+                                            {{ "field": "price", "operator": "{}", "value": "{}", "metafieldSlot": -1 }}
+                                        ],
+                                        "action": "hide_selected",
+                                        "targets": [
+                                            {{ "pattern": "pago en tienda", "matchType": "contains" }}
+                                        ]
+                                    }}
+                                ]
+                            }}
+                        }}
+                    }}
+                }}"#,
+                unit_price,
+                default_payment_methods_json(),
+                operator,
+                expected
+            )
+        };
+
+        let eq_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("100.00", "equals", "100"),
+        )?;
+        assert_eq!(
+            eq_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        let eq_miss = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("99.99", "equals", "100"),
+        )?;
+        assert_eq!(eq_miss.operations.len(), 0);
+
+        let gt_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("50000.50", "gt", "50000"),
+        )?;
+        assert_eq!(
+            gt_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        let gt_equal_miss = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("50000.00", "gt", "50000"),
+        )?;
+        assert_eq!(gt_equal_miss.operations.len(), 0);
+
+        let lt_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("19.95", "lt", "20"),
+        )?;
+        assert_eq!(
+            lt_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        let gte_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("250.00", "gte", "250"),
+        )?;
+        assert_eq!(
+            gte_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        let lte_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("250.00", "lte", "250"),
+        )?;
+        assert_eq!(
+            lte_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        let neq_hit = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_price_input("150.00", "not_equals", "100"),
+        )?;
+        assert_eq!(
+            neq_hit.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_native_shopify_spanish_equivalences() -> Result<()> {
+        let make_native_input = |pattern: &str, match_type: &str| {
+            format!(
+                r#"{{
+                    "cart": {{
+                        "lines": [
+                            {{
+                                "cost": {{ "amountPerQuantity": {{ "amount": "100.00" }} }},
+                                "merchandise": {{
+                                    "__typename": "ProductVariant",
+                                    "sku": "NAT-1",
+                                    "product": {{
+                                        "id": "gid://shopify/Product/1",
+                                        "title": "Test",
+                                        "productType": "Test",
+                                        "vendor": "Test",
+                                        "hasTags": [{{ "tag": "test-es", "hasTag": true }}],
+                                        "inCollections": [],
+                                        "mf0": null,
+                                        "mf1": null,
+                                        "mf2": null,
+                                        "mf3": null
+                                    }}
+                                }}
+                            }}
+                        ]
+                    }},
+                    "paymentMethods": [
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/1", "name": "Bank Deposit" }},
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/2", "name": "Money Order" }},
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/3", "name": "Cash on Delivery (COD)" }},
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/4", "name": "Gift card" }},
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/5", "name": "Deferred" }},
+                        {{ "id": "gid://shopify/PaymentCustomizationPaymentMethod/6", "name": "(for testing) Bogus Gateway" }}
+                    ],
+                    "paymentCustomization": {{
+                        "metafield": {{
+                            "jsonValue": {{
+                                "failSafe": false,
+                                "rules": [
+                                    {{
+                                        "cartMatch": "any",
+                                        "conditionLogic": "all",
+                                        "conditions": [
+                                            {{ "field": "tag", "operator": "equals", "value": "test-es", "metafieldSlot": -1 }}
+                                        ],
+                                        "action": "hide_selected",
+                                        "targets": [
+                                            {{ "pattern": "{}", "matchType": "{}" }}
+                                        ]
+                                    }}
+                                ]
+                            }}
+                        }}
+                    }}
+                }}"#,
+                pattern, match_type
+            )
+        };
+
+        // Bank Deposit <-> Depósito Bancario (with or without tilde)
+        for (pattern, match_type) in [
+            ("Depósito Bancario", "exact"),
+            ("Deposito Bancario", "exact"),
+            ("Depósito", "contains"),
+            ("deposito", "contains"),
+            ("DEPOSITO", "contains"),
+            ("bancario", "contains"),
+            ("Bank Deposit", "exact"),
+        ] {
+            let res = run_function_with_input(
+                cart_payment_methods_transform_run,
+                &make_native_input(pattern, match_type),
+            )?;
+            assert_eq!(
+                res.operations,
+                vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/1")],
+                "Expected Bank Deposit match for ({}, {})",
+                pattern,
+                match_type
+            );
+        }
+
+        // Gateway payment methods and product title ignoring tildes (NFC & NFD)
+        let tilde_gateway_and_title = r#"{
+            "cart": {
+                "lines": [
+                    {
+                        "cost": { "amountPerQuantity": { "amount": "100.00" } },
+                        "merchandise": {
+                            "__typename": "ProductVariant",
+                            "sku": "VID-1",
+                            "product": {
+                                "id": "gid://shopify/Product/1",
+                                "title": "El Videógrafo Snowboard",
+                                "productType": "Snowboard",
+                                "vendor": "Marca",
+                                "hasTags": [],
+                                "inCollections": [],
+                                "mf0": null,
+                                "mf1": null,
+                                "mf2": null,
+                                "mf3": null
+                            }
+                        }
+                    }
+                ]
+            },
+            "paymentMethods": [
+                { "id": "gid://shopify/PaymentCustomizationPaymentMethod/10", "name": "Checkout Flow | Tarjeta. Transf., Cuotas débito" },
+                { "id": "gid://shopify/PaymentCustomizationPaymentMethod/11", "name": "CUOTAS DE\u0301BITO" }
+            ],
+            "paymentCustomization": {
+                "metafield": {
+                    "jsonValue": {
+                        "failSafe": false,
+                        "rules": [
+                            {
+                                "cartMatch": "any",
+                                "conditionLogic": "all",
+                                "conditions": [
+                                    { "field": "title", "operator": "contains", "value": "videografo", "metafieldSlot": -1 }
+                                ],
+                                "action": "hide_selected",
+                                "targets": [
+                                    { "pattern": "cuotas debito", "matchType": "contains" }
+                                ]
+                            }
+                        ]
+                    }
+                }
+            }
+        }"#;
+        let tilde_res = run_function_with_input(
+            cart_payment_methods_transform_run,
+            tilde_gateway_and_title,
+        )?;
+        assert_eq!(
+            tilde_res.operations,
+            vec![
+                hide_op("gid://shopify/PaymentCustomizationPaymentMethod/10"),
+                hide_op("gid://shopify/PaymentCustomizationPaymentMethod/11"),
+            ]
+        );
+
+        // Money Order <-> Giro postal
+        for (pattern, match_type) in [("Giro postal", "exact"), ("Giro", "contains")] {
+            let res = run_function_with_input(
+                cart_payment_methods_transform_run,
+                &make_native_input(pattern, match_type),
+            )?;
+            assert_eq!(
+                res.operations,
+                vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/2")]
+            );
+        }
+
+        // Cash on Delivery (COD) <-> Pago contra entrega
+        for (pattern, match_type) in [
+            ("Pago contra entrega (COD)", "exact"),
+            ("Pago contra entrega", "contains"),
+        ] {
+            let res = run_function_with_input(
+                cart_payment_methods_transform_run,
+                &make_native_input(pattern, match_type),
+            )?;
+            assert_eq!(
+                res.operations,
+                vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/3")]
+            );
+        }
+
+        // Gift card <-> Tarjeta de regalo
+        let gift = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_native_input("Tarjeta de regalo", "exact"),
+        )?;
+        assert_eq!(
+            gift.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/4")]
+        );
+
+        // Deferred <-> Pago diferido
+        let deferred = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_native_input("Pago diferido", "exact"),
+        )?;
+        assert_eq!(
+            deferred.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/5")]
+        );
+
+        // (for testing) Bogus Gateway <-> Pasarela simulada
+        let bogus = run_function_with_input(
+            cart_payment_methods_transform_run,
+            &make_native_input("Pasarela simulada", "contains"),
+        )?;
+        assert_eq!(
+            bogus.operations,
+            vec![hide_op("gid://shopify/PaymentCustomizationPaymentMethod/6")]
+        );
+
         Ok(())
     }
 }
