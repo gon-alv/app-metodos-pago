@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useFetcher, useLoaderData } from "react-router";
 import { useAppBridge } from "@shopify/app-bridge-react";
 import { boundary } from "@shopify/shopify-app-react-router/server";
@@ -68,7 +68,11 @@ export const action = async ({ request }) => {
     if (!saveRes.ok) {
       return { ok: false, error: saveRes.error };
     }
-    return { ok: true, message: "Método de pago guardado." };
+    return {
+      ok: true,
+      intent: "add_method",
+      message: "Método de pago guardado.",
+    };
   }
 
   if (intent === "delete_method") {
@@ -78,7 +82,58 @@ export const action = async ({ request }) => {
     if (!saveRes.ok) {
       return { ok: false, error: saveRes.error };
     }
-    return { ok: true, message: "Método eliminado del catálogo." };
+    return {
+      ok: true,
+      intent: "delete_method",
+      message: "Método eliminado del catálogo.",
+    };
+  }
+
+  if (intent === "delete_selected") {
+    let parsedIds;
+    try {
+      parsedIds = JSON.parse(String(formData.get("methodIds") || "[]"));
+    } catch {
+      return {
+        ok: false,
+        error: "La lista de métodos seleccionados no es válida.",
+      };
+    }
+
+    if (!Array.isArray(parsedIds) || parsedIds.length === 0) {
+      return {
+        ok: false,
+        error: "Selecciona al menos un método para eliminar.",
+      };
+    }
+
+    const idsToDelete = new Set(parsedIds.map((id) => String(id)));
+    const initialCount = uiConfig.catalog.length;
+    uiConfig.catalog = uiConfig.catalog.filter((m) => !idsToDelete.has(m.id));
+    const removedCount = initialCount - uiConfig.catalog.length;
+
+    const saveRes = await saveUiConfig(admin, uiConfig);
+    if (!saveRes.ok) {
+      return { ok: false, error: saveRes.error };
+    }
+    return {
+      ok: true,
+      intent: "delete_selected",
+      message: `Se eliminaron ${removedCount} método(s) del catálogo.`,
+    };
+  }
+
+  if (intent === "delete_all") {
+    uiConfig.catalog = [];
+    const saveRes = await saveUiConfig(admin, uiConfig);
+    if (!saveRes.ok) {
+      return { ok: false, error: saveRes.error };
+    }
+    return {
+      ok: true,
+      intent: "delete_all",
+      message: "Se eliminaron todos los métodos del catálogo.",
+    };
   }
 
   if (intent === "load_presets") {
@@ -97,7 +152,11 @@ export const action = async ({ request }) => {
     if (!saveRes.ok) {
       return { ok: false, error: saveRes.error };
     }
-    return { ok: true, message: "Métodos sugeridos agregados." };
+    return {
+      ok: true,
+      intent: "load_presets",
+      message: "Métodos sugeridos agregados.",
+    };
   }
 
   return { ok: false, error: "Acción no reconocida." };
@@ -111,14 +170,45 @@ export default function PaymentMethodsCatalogPage() {
   const [label, setLabel] = useState("");
   const [pattern, setPattern] = useState("");
   const [matchType, setMatchType] = useState("contains");
+  const [selectionMode, setSelectionMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [confirmDeleteAll, setConfirmDeleteAll] = useState(false);
 
   const isBusy = fetcher.state !== "idle";
+
+  const activeCatalogIds = useMemo(
+    () => new Set(catalog.map((m) => m.id)),
+    [catalog],
+  );
+
+  const validSelectedIds = useMemo(
+    () => selectedIds.filter((id) => activeCatalogIds.has(id)),
+    [selectedIds, activeCatalogIds],
+  );
+
+  const selectedSet = useMemo(
+    () => new Set(validSelectedIds),
+    [validSelectedIds],
+  );
+
+  const allSelected =
+    catalog.length > 0 && validSelectedIds.length === catalog.length;
 
   useEffect(() => {
     if (fetcher.data?.ok && fetcher.data?.message) {
       shopify.toast.show(fetcher.data.message);
-      setLabel("");
-      setPattern("");
+      if (fetcher.data.intent === "add_method") {
+        setLabel("");
+        setPattern("");
+      }
+      if (
+        fetcher.data.intent === "delete_selected" ||
+        fetcher.data.intent === "delete_all"
+      ) {
+        setSelectedIds([]);
+        setSelectionMode(false);
+        setConfirmDeleteAll(false);
+      }
     } else if (fetcher.data?.error) {
       shopify.toast.show(fetcher.data.error, { isError: true });
     }
@@ -140,10 +230,37 @@ export default function PaymentMethodsCatalogPage() {
     fetcher.submit(formData, { method: "POST" });
   };
 
+  const handleDeleteSelected = () => {
+    if (validSelectedIds.length === 0) return;
+    const formData = new FormData();
+    formData.set("intent", "delete_selected");
+    formData.set("methodIds", JSON.stringify(validSelectedIds));
+    fetcher.submit(formData, { method: "POST" });
+  };
+
+  const handleDeleteAll = () => {
+    const formData = new FormData();
+    formData.set("intent", "delete_all");
+    fetcher.submit(formData, { method: "POST" });
+  };
+
   const handleLoadPresets = () => {
     const formData = new FormData();
     formData.set("intent", "load_presets");
     fetcher.submit(formData, { method: "POST" });
+  };
+
+  const handleToggleOne = (methodId) => {
+    setSelectedIds((prev) => {
+      const current = prev.filter((id) => activeCatalogIds.has(id));
+      return current.includes(methodId)
+        ? current.filter((id) => id !== methodId)
+        : [...current, methodId];
+    });
+  };
+
+  const handleToggleSelectAll = () => {
+    setSelectedIds(allSelected ? [] : catalog.map((m) => m.id));
   };
 
   return (
@@ -243,43 +360,169 @@ export default function PaymentMethodsCatalogPage() {
             </s-stack>
           </s-box>
         ) : (
-          <s-table variant="auto">
-            <s-table-header-row>
-              <s-table-header listSlot="primary">Nombre</s-table-header>
-              <s-table-header>Texto en checkout</s-table-header>
-              <s-table-header>Tipo de coincidencia</s-table-header>
-              <s-table-header>Acción</s-table-header>
-            </s-table-header-row>
-            <s-table-body>
-              {catalog.map((method) => (
-                <s-table-row key={method.id}>
-                  <s-table-cell>
-                    <s-text type="strong">{method.label}</s-text>
-                  </s-table-cell>
-                  <s-table-cell>
-                    <code>{method.pattern}</code>
-                  </s-table-cell>
-                  <s-table-cell>
-                    <s-badge
-                      tone={method.matchType === "exact" ? "info" : "neutral"}
-                    >
-                      {method.matchType === "exact" ? "Exacto" : "Contiene"}
-                    </s-badge>
-                  </s-table-cell>
-                  <s-table-cell>
+          <s-stack direction="block" gap="base">
+            {!selectionMode ? (
+              <s-stack
+                direction="inline"
+                gap="base"
+                alignItems="center"
+                justifyContent="space-between"
+              >
+                <s-text color="subdued">
+                  {catalog.length} método(s) guardado(s)
+                </s-text>
+                <s-stack direction="inline" gap="small">
+                  <s-button
+                    variant="secondary"
+                    disabled={isBusy || undefined}
+                    onClick={() => {
+                      setSelectionMode(true);
+                      setConfirmDeleteAll(false);
+                    }}
+                  >
+                    Seleccionar para eliminar
+                  </s-button>
+                  <s-button
+                    variant="secondary"
+                    tone="critical"
+                    disabled={isBusy || undefined}
+                    onClick={() => setConfirmDeleteAll(true)}
+                  >
+                    Eliminar todos
+                  </s-button>
+                </s-stack>
+              </s-stack>
+            ) : (
+              <s-box
+                padding="base"
+                background="subdued"
+                borderWidth="base"
+                borderRadius="base"
+              >
+                <s-stack
+                  direction="inline"
+                  gap="base"
+                  alignItems="center"
+                  justifyContent="space-between"
+                >
+                  <s-stack direction="inline" gap="base" alignItems="center">
+                    <s-checkbox
+                      label={
+                        allSelected ? "Deseleccionar todos" : "Seleccionar todos"
+                      }
+                      checked={allSelected || undefined}
+                      onInput={handleToggleSelectAll}
+                    />
+                    <s-text color="subdued">
+                      {validSelectedIds.length} de {catalog.length} seleccionado(s)
+                    </s-text>
+                  </s-stack>
+                  <s-stack direction="inline" gap="small">
                     <s-button
-                      variant="tertiary"
+                      variant="primary"
                       tone="critical"
-                      disabled={isBusy || undefined}
-                      onClick={() => handleDelete(method.id)}
+                      loading={isBusy || undefined}
+                      disabled={
+                        isBusy || validSelectedIds.length === 0 || undefined
+                      }
+                      onClick={handleDeleteSelected}
                     >
-                      Eliminar
+                      Eliminar seleccionados ({validSelectedIds.length})
                     </s-button>
-                  </s-table-cell>
-                </s-table-row>
-              ))}
-            </s-table-body>
-          </s-table>
+                    <s-button
+                      variant="secondary"
+                      disabled={isBusy || undefined}
+                      onClick={() => {
+                        setSelectionMode(false);
+                        setSelectedIds([]);
+                      }}
+                    >
+                      Cancelar
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+              </s-box>
+            )}
+
+            {confirmDeleteAll && !selectionMode && (
+              <s-banner heading="Confirmar eliminación total" tone="critical">
+                <s-stack direction="block" gap="small">
+                  <s-paragraph>
+                    Se eliminarán los {catalog.length} método(s) guardado(s) del
+                    catálogo. Las reglas ya creadas conservarán sus métodos
+                    configurados.
+                  </s-paragraph>
+                  <s-stack direction="inline" gap="small">
+                    <s-button
+                      variant="primary"
+                      tone="critical"
+                      loading={isBusy || undefined}
+                      disabled={isBusy || undefined}
+                      onClick={handleDeleteAll}
+                    >
+                      Confirmar eliminar todos
+                    </s-button>
+                    <s-button
+                      variant="secondary"
+                      disabled={isBusy || undefined}
+                      onClick={() => setConfirmDeleteAll(false)}
+                    >
+                      Cancelar
+                    </s-button>
+                  </s-stack>
+                </s-stack>
+              </s-banner>
+            )}
+
+            <s-table variant="auto">
+              <s-table-header-row>
+                {selectionMode && <s-table-header>Selección</s-table-header>}
+                <s-table-header listSlot="primary">Nombre</s-table-header>
+                <s-table-header>Texto en checkout</s-table-header>
+                <s-table-header>Tipo de coincidencia</s-table-header>
+                <s-table-header>Acción</s-table-header>
+              </s-table-header-row>
+              <s-table-body>
+                {catalog.map((method) => (
+                  <s-table-row key={method.id}>
+                    {selectionMode && (
+                      <s-table-cell>
+                        <s-checkbox
+                          label={`Seleccionar ${method.label}`}
+                          labelAccessibilityVisibility="exclusive"
+                          checked={selectedSet.has(method.id) || undefined}
+                          onInput={() => handleToggleOne(method.id)}
+                        />
+                      </s-table-cell>
+                    )}
+                    <s-table-cell>
+                      <s-text type="strong">{method.label}</s-text>
+                    </s-table-cell>
+                    <s-table-cell>
+                      <code>{method.pattern}</code>
+                    </s-table-cell>
+                    <s-table-cell>
+                      <s-badge
+                        tone={method.matchType === "exact" ? "info" : "neutral"}
+                      >
+                        {method.matchType === "exact" ? "Exacto" : "Contiene"}
+                      </s-badge>
+                    </s-table-cell>
+                    <s-table-cell>
+                      <s-button
+                        variant="tertiary"
+                        tone="critical"
+                        disabled={isBusy || undefined}
+                        onClick={() => handleDelete(method.id)}
+                      >
+                        Eliminar
+                      </s-button>
+                    </s-table-cell>
+                  </s-table-row>
+                ))}
+              </s-table-body>
+            </s-table>
+          </s-stack>
         )}
       </s-section>
     </s-page>
