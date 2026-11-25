@@ -1,237 +1,142 @@
-# Shopify App Template - React Router
+# App Personalización de Métodos de Pago (`app-metodos-pago`)
 
-This is a template for building a [Shopify app](https://shopify.dev/docs/apps/getting-started) using [React Router](https://reactrouter.com/). It was forked from the [Shopify Remix app template](https://github.com/Shopify/shopify-app-template-remix) and converted to React Router.
+Aplicación embebida de Shopify que permite definir reglas dinámicas para **ocultar o restringir los métodos de pago mostrados al cliente en el checkout**, evaluando los campos estándar y metacampos de los productos presentes en el carrito mediante una **Shopify Function en Rust** (`cart.payment-methods.transform.run`, API `2026-07`).
 
-Rather than cloning this repo, follow the [Quick Start steps](https://github.com/Shopify/shopify-app-template-react-router#quick-start).
+---
 
-Visit the [`shopify.dev` documentation](https://shopify.dev/docs/api/shopify-app-react-router) for more details on the React Router app package.
+## Funcionalidades principales
 
-## Upgrading from Remix
+### 1. Acciones de visibilidad en el checkout
+Cada regla aplica una acción sobre los métodos de pago disponibles en el checkout:
+- **Ocultar métodos seleccionados (`hide_selected`)**: oculta los métodos que coincidan con los patrones indicados.
+- **Mostrar solo los seleccionados (`allow_only_selected`)**: oculta todos los demás métodos del checkout, dejando visibles únicamente los seleccionados.
 
-If you have an existing Remix app that you want to upgrade to React Router, please follow the [upgrade guide](https://github.com/Shopify/shopify-app-template-react-router/wiki/Upgrading-from-Remix). Otherwise, please follow the quick start guide below.
+**Ejemplos de uso incluidos como plantillas de 1 clic:**
+- Si `tag = "reacondicionado"` → mostrar solo `"Transferencia directa"` (oculta el resto).
+- Si `tag = "servicio-tecnico"` → ocultar `"Pago en tienda"`.
 
-## Quick start
+### 2. Condiciones sobre productos y metacampos
+- **Lógica por producto**: combina múltiples condiciones con **Y (`all`)** o **O (`any`)**.
+- **Alcance en el carrito**:
+  - `any`: la regla se activa si **al menos un producto** del carrito cumple las condiciones.
+  - `all`: la regla se activa solo si **todos los productos** del carrito las cumplen.
+- **Campos soportados**:
+  - Estándar: Etiqueta (`tag`), Colección (`collection`), Tipo de producto (`product_type`), Proveedor (`vendor`), SKU de variante (`sku`) y Título del producto (`title`).
+  - Metacampos de producto (`metafield`): seleccionables desde las definiciones de la tienda o ingresando `namespace` y `key` manualmente (hasta **4 metacampos distintos** activos en paralelo).
+- **Operadores**:
+  - Texto: `equals`, `not_equals`, `contains`, `not_contains`, `starts_with` (insensibles a mayúsculas, minúsculas y espacios al inicio/final).
+  - Pertenencia: `in`, `not_in` (para colecciones y etiquetas).
+  - Presencia: `is_empty`, `is_not_empty`.
+  - Numéricos: `gt`, `gte`, `lt`, `lte` (sobre valores de metacampos numéricos).
 
-### Prerequisites
+### 3. Resolución acumulativa y protección anti-bloqueo (`failSafe`)
+- **Evaluación acumulativa**: cuando un carrito activa más de una regla simultáneamente, se combinan todas sus restricciones (cualquier método ocultado o excluido por al menos una regla queda oculto).
+- **Protección anti-bloqueo (`failSafe`)**: activada por defecto. Si la combinación de reglas llegara a ocultar **todos** los métodos de pago disponibles en el checkout (dejando 0 opciones), la Function devuelve `operations: []` para no bloquear la compra del cliente.
 
-Before you begin, you'll need to [download and install the Shopify CLI](https://shopify.dev/docs/apps/tools/cli/getting-started) if you haven't already.
+### 4. Catálogo reutilizable de métodos de pago
+Dado que la Admin API de Shopify no expone la lista de métodos de pago activos del checkout, la app mantiene un catálogo reutilizable donde defines cada método con su nombre visible y patrón de coincidencia:
+- **Contiene texto (`contains`)**: recomendado; coincide si el nombre en checkout incluye el texto (ej. `"transferencia directa"`).
+- **Nombre exacto (`exact`)**: coincide exactamente (insensible a mayúsculas y espacios).
 
-### Setup
+### 5. Vistas de la aplicación (`/app`)
+- **Panel principal (`app/routes/app._index.jsx`)**: activar/pausar la personalización en el checkout, activar/desactivar la protección anti-bloqueo, cargar reglas de ejemplo, gestionar reglas (editar, activar/pausar, duplicar, eliminar) y monitorear los límites de Shopify Functions en tiempo real.
+- **Editor de reglas (`app/routes/app.rules.$ruleId.jsx`)**: constructor de condiciones con autocompletado de etiquetas, tipos, proveedores, colecciones y definiciones de metacampos de la tienda, selector de métodos guardados, agregado rápido de métodos personalizados y vista previa legible en español.
+- **Catálogo de métodos de pago (`app/routes/app.methods.jsx`)**: alta, eliminación y restauración de métodos sugeridos reutilizables en las reglas.
 
-```shell
-shopify app init --template=https://github.com/Shopify/shopify-app-template-react-router
+---
+
+## Arquitectura técnica
+
+### Stack
+- **App embebida**: React Router v7, React 18, App Bridge v4 y Polaris Web Components v2 (`@shopify/polaris-types`).
+- **Base de datos de sesiones**: Prisma + SQLite (`prisma/schema.prisma`, modelo `Session` para desarrollo local).
+- **Shopify Function**: Rust (`shopify_function` 2.3.0) compilado a WebAssembly (`wasm32-unknown-unknown`) en `extensions/personalizacion-pagos`.
+
+### Almacenamiento en Shopify (`$app:payment-filter`)
+Toda la configuración vive en 3 metafields de tipo `json` asociados al propietario `PaymentCustomization`, escritos de forma atómica desde `app/services/payment-customization.server.js`:
+1. `ui-config`: configuración completa para la interfaz (incluye reglas pausadas, etiquetas legibles y catálogo de métodos). La Function no lo consulta.
+2. `rules-config`: configuración mínima compilada solo con las reglas activas y los índices de slot de metacampos (`0..3`), leída por la Function vía `jsonValue`.
+3. `input-vars`: variables de entrada vinculadas mediante `input_variables` en `shopify.extension.toml` con las 10 claves fijas de la consulta GraphQL (`watchedTags`, `watchedCollections`, `mf0Ns`/`mf0Key` … `mf3Ns`/`mf3Key`).
+
+### Permisos y límites
+- **Scopes requeridos (`shopify.app.toml`)**: `read_products`, `write_payment_customizations`.
+- **Presupuesto de Shopify Functions**:
+  - Máximo **4 metacampos de producto** distintos entre todas las reglas activas (las reglas pausadas no consumen espacios).
+  - Máximo **100 etiquetas** únicas (`watchedTags`) y **100 colecciones** únicas (`watchedCollections`) activas.
+  - Tamaño seguro máximo de `rules-config`: **9,800 bytes** UTF-8 (límite de plataforma: 10,000 bytes).
+  - Costo de la input query (`cart_payment_methods_transform_run.graphql`): **28 / 30**.
+
+### Estructura principal del proyecto
+```text
+app/
+├── lib/
+│   ├── payment-rules.js                # Esquema, validadores, plantillas y compilador de metafields
+│   └── payment-rules.test.js           # Tests unitarios del compilador y validadores
+├── routes/
+│   ├── app.jsx                         # Layout embebido y navegación (/app, /app/methods)
+│   ├── app._index.jsx                  # Panel principal de reglas y estado en checkout
+│   ├── app.rules.$ruleId.jsx           # Editor/creador de reglas
+│   └── app.methods.jsx                 # Catálogo de métodos de pago
+└── services/
+    └── payment-customization.server.js # Lectura y guardado GraphQL Admin (2026-07)
+
+extensions/personalizacion-pagos/
+├── shopify.extension.toml              # Target cart.payment-methods.transform.run e input_variables
+├── src/
+│   ├── main.rs                         # Registro de schema y custom_scalar_overrides
+│   ├── cart_payment_methods_transform_run.graphql
+│   └── cart_payment_methods_transform_run.rs
+└── tests/
+    ├── default.test.js                 # Runner Vitest sobre el binario WASM
+    └── fixtures/                       # Casos de prueba JSON de integración
 ```
 
-### Local Development
+---
 
-```shell
+## Desarrollo local y pruebas
+
+### Prerrequisitos
+- **Node.js** `>= 22.12`
+- **Shopify CLI** (`shopify`)
+- **Rust** con el target `wasm32-unknown-unknown` instalado:
+  ```powershell
+  rustup target add wasm32-unknown-unknown
+  ```
+
+### Ejecutar en tienda de desarrollo
+```powershell
 shopify app dev
 ```
 
-Press P to open the URL to your app. Once you click install, you can start development.
+### Validaciones, compilación y tests
+```powershell
+# Compilar la Shopify Function a WebAssembly y ejecutar sus tests unitarios en Rust
+cd extensions/personalizacion-pagos
+cargo test
+cargo build --target=wasm32-unknown-unknown --release
 
-Local development is powered by [the Shopify CLI](https://shopify.dev/docs/apps/tools/cli). It logs into your account, connects to an app, provides environment variables, updates remote config, creates a tunnel and provides commands to generate extensions.
+# Ejecutar tests de integración WASM con Vitest
+npx vitest run
+cd ../..
 
-### Authenticating and querying data
+# Tests unitarios del compilador de reglas (Node)
+node --test app/lib/payment-rules.test.js
 
-To authenticate and query data you can use the `shopify` const that is exported from `/app/shopify.server.js`:
-
-```js
-export async function loader({ request }) {
-  const { admin } = await shopify.authenticate.admin(request);
-
-  const response = await admin.graphql(`
-    {
-      products(first: 25) {
-        nodes {
-          title
-          description
-        }
-      }
-    }`);
-
-  const {
-    data: {
-      products: { nodes },
-    },
-  } = await response.json();
-
-  return nodes;
-}
-```
-
-This template comes pre-configured with examples of:
-
-1. Setting up your Shopify app in [/app/shopify.server.ts](https://github.com/Shopify/shopify-app-template-react-router/blob/main/app/shopify.server.ts)
-2. Querying data using Graphql. Please see: [/app/routes/app.\_index.tsx](https://github.com/Shopify/shopify-app-template-react-router/blob/main/app/routes/app._index.tsx).
-3. Responding to webhooks. Please see [/app/routes/webhooks.tsx](https://github.com/Shopify/shopify-app-template-react-router/blob/main/app/routes/webhooks.app.uninstalled.tsx).
-4. Using metafields, metaobjects, and declarative custom data definitions. Please see [/app/routes/app.\_index.tsx](https://github.com/Shopify/shopify-app-template-react-router/blob/main/app/routes/app._index.tsx) and [shopify.app.toml](https://github.com/Shopify/shopify-app-template-react-router/blob/main/shopify.app.toml).
-
-Please read the [documentation for @shopify/shopify-app-react-router](https://shopify.dev/docs/api/shopify-app-react-router) to see what other API's are available.
-
-## Shopify Dev MCP
-
-This template is configured with the Shopify Dev MCP. This instructs [Cursor](https://cursor.com/), [GitHub Copilot](https://github.com/features/copilot) and [Claude Code](https://claude.com/product/claude-code) and [Google Gemini CLI](https://github.com/google-gemini/gemini-cli) to use the Shopify Dev MCP.
-
-For more information on the Shopify Dev MCP please read [the documentation](https://shopify.dev/docs/apps/build/devmcp).
-
-## Deployment
-
-### Application Storage
-
-This template uses [Prisma](https://www.prisma.io/) to store session data, by default using an [SQLite](https://www.sqlite.org/index.html) database.
-The database is defined as a Prisma schema in `prisma/schema.prisma`.
-
-This use of SQLite works in production if your app runs as a single instance.
-The database that works best for you depends on the data your app needs and how it is queried.
-Here’s a short list of databases providers that provide a free tier to get started:
-
-| Database   | Type             | Hosters                                                                                                                                                                                                                                    |
-| ---------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| MySQL      | SQL              | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-mysql), [Planet Scale](https://planetscale.com/), [Amazon Aurora](https://aws.amazon.com/rds/aurora/), [Google Cloud SQL](https://cloud.google.com/sql/docs/mysql) |
-| PostgreSQL | SQL              | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-postgresql), [Amazon Aurora](https://aws.amazon.com/rds/aurora/), [Google Cloud SQL](https://cloud.google.com/sql/docs/postgres)                                   |
-| Redis      | Key-value        | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-redis), [Amazon MemoryDB](https://aws.amazon.com/memorydb/)                                                                                                        |
-| MongoDB    | NoSQL / Document | [Digital Ocean](https://www.digitalocean.com/products/managed-databases-mongodb), [MongoDB Atlas](https://www.mongodb.com/atlas/database)                                                                                                  |
-
-To use one of these, you can use a different [datasource provider](https://www.prisma.io/docs/reference/api-reference/prisma-schema-reference#datasource) in your `schema.prisma` file, or a different [SessionStorage adapter package](https://github.com/Shopify/shopify-api-js/blob/main/packages/shopify-api/docs/guides/session-storage.md).
-
-### Build
-
-Build the app by running the command below with the package manager of your choice:
-
-Using yarn:
-
-```shell
-yarn build
-```
-
-Using npm:
-
-```shell
+# Build, lint, typecheck y validación de configuración Shopify
 npm run build
+npm run lint
+npm run typecheck
+shopify app config validate
 ```
 
-Using pnpm:
+*(En PowerShell de Windows, si la política de ejecución bloquea scripts `.ps1`, utiliza `npm.cmd`, `npx.cmd` y `shopify.cmd`.)*
 
-```shell
-pnpm run build
-```
+---
 
-## Hosting
+## Despliegue y publicación (Unlisted / Custom)
 
-When you're ready to set up your app in production, you can follow [our deployment documentation](https://shopify.dev/docs/apps/launch/deployment) to host it externally. From there, you have a few options:
-
-- [Google Cloud Run](https://shopify.dev/docs/apps/launch/deployment/deploy-to-google-cloud-run): This tutorial is written specifically for this example repo, and is compatible with the extended steps included in the subsequent [**Build your app**](tutorial) in the **Getting started** docs. It is the most detailed tutorial for taking a React Router-based Shopify app and deploying it to production. It includes configuring permissions and secrets, setting up a production database, and even hosting your apps behind a load balancer across multiple regions.
-- [Fly.io](https://fly.io/docs/js/shopify/): Leverages the Fly.io CLI to quickly launch Shopify apps to a single machine.
-- [Render](https://render.com/docs/deploy-shopify-app): This tutorial guides you through using Docker to deploy and install apps on a Dev store.
-- [Manual deployment guide](https://shopify.dev/docs/apps/launch/deployment/deploy-to-hosting-service): This resource provides general guidance on the requirements of deployment including environment variables, secrets, and persistent data.
-
-When you reach the step for [setting up environment variables](https://shopify.dev/docs/apps/deployment/web#set-env-vars), you also need to set the variable `NODE_ENV=production`.
-
-## Gotchas / Troubleshooting
-
-### Database tables don't exist
-
-If you get an error like:
-
-```
-The table `main.Session` does not exist in the current database.
-```
-
-Create the database for Prisma. Run the `setup` script in `package.json` using `npm`, `yarn` or `pnpm`.
-
-### Navigating/redirecting breaks an embedded app
-
-Embedded apps must maintain the user session, which can be tricky inside an iFrame. To avoid issues:
-
-1. Use `Link` from `react-router` or `@shopify/polaris`. Do not use `<a>`.
-2. Use `redirect` returned from `authenticate.admin`. Do not use `redirect` from `react-router`
-3. Use `useSubmit` from `react-router`.
-
-This only applies if your app is embedded, which it will be by default.
-
-### Webhooks: shop-specific webhook subscriptions aren't updated
-
-If you are registering webhooks in the `afterAuth` hook, using `shopify.registerWebhooks`, you may find that your subscriptions aren't being updated.
-
-Instead of using the `afterAuth` hook declare app-specific webhooks in the `shopify.app.toml` file. This approach is easier since Shopify will automatically sync changes every time you run `deploy` (e.g: `npm run deploy`). Please read these guides to understand more:
-
-1. [app-specific vs shop-specific webhooks](https://shopify.dev/docs/apps/build/webhooks/subscribe#app-specific-subscriptions)
-2. [Create a subscription tutorial](https://shopify.dev/docs/apps/build/webhooks/subscribe/get-started?deliveryMethod=https)
-
-If you do need shop-specific webhooks, keep in mind that the package calls `afterAuth` in 2 scenarios:
-
-- After installing the app
-- When an access token expires
-
-During normal development, the app won't need to re-authenticate most of the time, so shop-specific subscriptions aren't updated. To force your app to update the subscriptions, uninstall and reinstall the app. Revisiting the app will call the `afterAuth` hook.
-
-### Webhooks: Admin created webhook failing HMAC validation
-
-Webhooks subscriptions created in the [Shopify admin](https://help.shopify.com/en/manual/orders/notifications/webhooks) will fail HMAC validation. This is because the webhook payload is not signed with your app's secret key.
-
-The recommended solution is to use [app-specific webhooks](https://shopify.dev/docs/apps/build/webhooks/subscribe#app-specific-subscriptions) defined in your toml file instead. Test your webhooks by triggering events manually in the Shopify admin(e.g. Updating the product title to trigger a `PRODUCTS_UPDATE`).
-
-### Webhooks: Admin object undefined on webhook events triggered by the CLI
-
-When you trigger a webhook event using the Shopify CLI, the `admin` object will be `undefined`. This is because the CLI triggers an event with a valid, but non-existent, shop. The `admin` object is only available when the webhook is triggered by a shop that has installed the app. This is expected.
-
-Webhooks triggered by the CLI are intended for initial experimentation testing of your webhook configuration. For more information on how to test your webhooks, see the [Shopify CLI documentation](https://shopify.dev/docs/apps/tools/cli/commands#webhook-trigger).
-
-### Incorrect GraphQL Hints
-
-By default the [graphql.vscode-graphql](https://marketplace.visualstudio.com/items?itemName=GraphQL.vscode-graphql) extension for will assume that GraphQL queries or mutations are for the [Shopify Admin API](https://shopify.dev/docs/api/admin). This is a sensible default, but it may not be true if:
-
-1. You use another Shopify API such as the storefront API.
-2. You use a third party GraphQL API.
-
-If so, please update [.graphqlrc.ts](https://github.com/Shopify/shopify-app-template-react-router/blob/main/.graphqlrc.ts).
-
-### Using Defer & await for streaming responses
-
-By default the CLI uses a cloudflare tunnel. Unfortunately cloudflare tunnels wait for the Response stream to finish, then sends one chunk. This will not affect production.
-
-To test [streaming using await](https://reactrouter.com/api/components/Await#await) during local development we recommend [localhost based development](https://shopify.dev/docs/apps/build/cli-for-apps/networking-options#localhost-based-development).
-
-### "nbf" claim timestamp check failed
-
-This is because a JWT token is expired. If you are consistently getting this error, it could be that the clock on your machine is not in sync with the server. To fix this ensure you have enabled "Set time and date automatically" in the "Date and Time" settings on your computer.
-
-### Using MongoDB and Prisma
-
-If you choose to use MongoDB with Prisma, there are some gotchas in Prisma's MongoDB support to be aware of. Please see the [Prisma SessionStorage README](https://www.npmjs.com/package/@shopify/shopify-app-session-storage-prisma#mongodb).
-
-### Unable to require(`C:\...\query_engine-windows.dll.node`).
-
-Unable to require(`C:\...\query_engine-windows.dll.node`).
-The Prisma engines do not seem to be compatible with your system.
-
-query_engine-windows.dll.node is not a valid Win32 application.
-
-**Fix:** Set the environment variable:
-
-```shell
-PRISMA_CLIENT_ENGINE_TYPE=binary
-```
-
-This forces Prisma to use the binary engine mode, which runs the query engine as a separate process and can work via emulation on Windows ARM64.
-
-## Resources
-
-React Router:
-
-- [React Router docs](https://reactrouter.com/home)
-
-Shopify:
-
-- [Intro to Shopify apps](https://shopify.dev/docs/apps/getting-started)
-- [Shopify App React Router docs](https://shopify.dev/docs/api/shopify-app-react-router)
-- [Shopify CLI](https://shopify.dev/docs/apps/tools/cli)
-- [Shopify App Bridge](https://shopify.dev/docs/api/app-bridge-library).
-- [Polaris Web Components](https://shopify.dev/docs/api/app-home/polaris-web-components).
-- [App extensions](https://shopify.dev/docs/apps/app-extensions/list)
-- [Shopify Functions](https://shopify.dev/docs/api/functions)
-
-Internationalization:
-
-- [Internationalizing your app](https://shopify.dev/docs/apps/best-practices/internationalization/getting-started)
+1. **Hosting de la app web**: `shopify app deploy` sube la configuración y el módulo `.wasm` de la Shopify Function, pero el servidor Node/React Router debe desplegarse en un hosting HTTPS propio (el proyecto incluye `Dockerfile`).
+2. **Base de datos y webhooks de cumplimiento**: antes de publicar como app pública con visibilidad limitada (*Unlisted* / *Limited visibility*), configura una base de datos persistente para producción (por ejemplo PostgreSQL en `prisma/schema.prisma`) y agrega los webhooks obligatorios de privacidad (`customers/data_request`, `customers/redact`, `shop/redact`) en `shopify.app.toml`.
+3. **Tipo de distribución**:
+   - **Tiendas Basic / Shopify / Advanced**: requieren **Public distribution** (puedes configurarla como **Limit visibility / Unlisted** en el Partner Dashboard tras pasar la revisión de la App Store para que solo sea accesible por enlace directo).
+   - **Tiendas Shopify Plus**: pueden usar **Custom distribution** sin pasar por revisión de la App Store.
