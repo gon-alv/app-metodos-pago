@@ -1,7 +1,12 @@
 .cache
 .env
+.env.*
+.git
+.react-router
 .shopify
 build
 node_modules
+extensions/*/node_modules
+extensions/*/target
 prisma/*.sqlite
 prisma/*.sqlite-journal

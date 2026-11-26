@@ -1,0 +1,18 @@
+services:
+  app:
+    build: .
+    container_name: app-metodos-pago
+    restart: unless-stopped
+    env_file:
+      - .env
+    ports:
+      - "127.0.0.1:${PORT:-3000}:3000"
+    volumes:
+      - app_data:/data
+    # Si tu cloudflared corre dentro de otro contenedor Docker en lugar del host,
+    # conecta este servicio a la misma red externa y apunta el túnel a http://app-metodos-pago:3000
+    # networks:
+    #   - cloudflared_net
+
+volumes:
+  app_data:
