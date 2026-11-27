@@ -2,12 +2,11 @@
 
 client_id = "9c3f48c760507338f0719479a41df266"
 name = "app-metodos-pago"
-application_url = "https://example.com"
+application_url = "https://pagos.viasur.cl"
 embedded = true
 
 [build]
 automatically_update_urls_on_dev = true
-include_config_on_deploy = true
 
 [webhooks]
 api_version = "2027-01"
@@ -20,9 +19,17 @@ api_version = "2027-01"
   uri = "/webhooks/app/uninstalled"
   topics = [ "app/uninstalled" ]
 
+  [[webhooks.subscriptions]]
+  uri = "/webhooks/compliance"
+  compliance_topics = [ "customers/data_request", "customers/redact", "shop/redact" ]
+
 [access_scopes]
 # Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
 scopes = "read_products,write_payment_customizations"
 
 [auth]
-redirect_urls = [ "https://example.com/api/auth" ]
+redirect_urls = [
+  "https://pagos.viasur.cl/auth/callback",
+  "https://pagos.viasur.cl/auth/shopify/callback",
+  "https://pagos.viasur.cl/api/auth/callback"
+]

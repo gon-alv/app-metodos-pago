@@ -9,10 +9,16 @@ services:
       - "127.0.0.1:${PORT:-3000}:3000"
     volumes:
       - app_data:/data
-    # Si tu cloudflared corre dentro de otro contenedor Docker en lugar del host,
-    # conecta este servicio a la misma red externa y apunta el túnel a http://app-metodos-pago:3000
-    # networks:
-    #   - cloudflared_net
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: app-metodos-pago-tunnel
+    restart: unless-stopped
+    depends_on:
+      - app
+    command: tunnel --no-autoupdate run
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN:?Define CLOUDFLARE_TUNNEL_TOKEN en .env}
 
 volumes:
   app_data:
